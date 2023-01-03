@@ -4,6 +4,8 @@ ini_set('display_errors', false);
 ini_set('max_execution_time', 120); // 120 seconds
 define('CMS_TABLES', ['cms_articles', 'cms_articles_categories', 'cms_articles_tags', 'cms_categories', 'cms_collections', 'cms_collections_coverphotos', 'cms_collections_photos', 'cms_comments', 'cms_links', 'cms_pages', 'cms_photos', 'cms_photos_categories', 'cms_photos_tags', 'cms_tags']);
 define('ENDPOINT_URL', 'https://www.service.io200.com/api/v1/');
+define('DOWNLOAD_URL', 'https://www.io200.com/storage/downloads/');
+
 
 /*
 Copyright (c) Michael Kirste, https://www.io200.com/terms
@@ -643,6 +645,7 @@ function checkInstallFile() {
 function InstallCheck($DATA) {
     $DatabaseConnection = new DatabaseConnection($DATA['databasesettings']['db_hostname'], $DATA['databasesettings']['db_username'], $DATA['databasesettings']['db_password'], $DATA['databasesettings']['db_database']);
 
+	// Database
     if (ErrorInfo::isError($DatabaseConnection->STATUS())) {
         return new ErrorInfo('', 'No database connection!');
     } else {
@@ -658,6 +661,24 @@ function InstallCheck($DATA) {
         }
     }
 
+	// Files	
+	$test_file = fopen(__DIR__ . '/test.json', 'w');
+	if($test_file === false){
+		return new ErrorInfo('', "Cannot open files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+	}
+    $result = fwrite($test_file, json_encode(['test' => 'test']));
+	if($result === false){
+		return new ErrorInfo('', "Cannot write files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+	}else{
+		fclose($test_file);
+	}
+	if (file_exists(__DIR__ . '/test.json')) {
+		$result = unlink(__DIR__ . '/test.json');
+		if($result === false){
+			return new ErrorInfo('', "Cannot delete files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+		}
+	}
+	
     return true;
 }
 function InstallSystem($DATA) {
@@ -683,7 +704,9 @@ function InstallSystem($DATA) {
                 return new ErrorInfo('', 'System install error (cannot download dist.zip)!');
             }
         } else {
-            unlink(__DIR__ . "/dist.zip");
+			if (file_exists(__DIR__ . '/dist.zip')) {
+				unlink(__DIR__ . "/dist.zip");
+			}
             return new ErrorInfo('', 'System install error (cannot download dist.zip)!');
         }
     }
@@ -789,6 +812,44 @@ function ConfigurateSystem($DATA) {
             return new ErrorInfo('', 'Theme configuration error!');
         }
     }
+	
+	// /storage/system/lang.php
+	if($DATA['websitesettings']['lang'] !== 'en'){
+		$lang_downloadfile = 'lang-' . $DATA['websitesettings']['lang'] .'.zip';
+		
+		// download
+		$fh = fopen(__DIR__ . '/lang.zip', 'w');
+        $ch = curl_init();
+		curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
+        curl_setopt($ch, CURLOPT_URL, DOWNLOAD_URL . $lang_downloadfile);
+        curl_setopt($ch, CURLOPT_FILE, $fh);
+        curl_exec($ch);
+        $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        fclose($fh);
+        if ($response_code === 200) {
+            clearstatcache();
+		}
+		if (!filesize(__DIR__ . '/lang.zip')) {
+			if (file_exists(__DIR__ . '/lang.zip')) {
+				unlink(__DIR__ . '/lang.zip');
+			}
+		}		 
+
+		// extract
+		if (file_exists(__DIR__ . '/lang.zip')) {
+			$zip = new ZipArchive;
+			if ($zip->open(__DIR__ . '/lang.zip') === true) {
+				$zip->extractTo(__DIR__);
+				$zip->close();
+				copy(__DIR__ . '/lang.php', __DIR__ . '/storage/system/lang.php');
+				unlink(__DIR__ . '/lang.php');
+				unlink(__DIR__ . '/lang.zip');
+			}
+		}
+	}
+	
 
     return true;
 }
@@ -1109,7 +1170,7 @@ if ($DATA['_step'] + 1 === 2) {
 <fieldset>
     <h2>Database Connection</h2>
     <p>
-        <label class="visible" for="db_hostname">Host <span class="info textsmaller">(hostname, servername, or IP address of your database)</span></label>
+        <label class="visible" for="db_hostname">Host<br><span class="textsmaller">(hostname, servername, or IP address of your database)</span></label>
         <input name="db_hostname" type="text" placeholder="" value="' . (isset($_POST['db_hostname']) ? $_POST['db_hostname'] : '') . '"/>
     </p>
     <p>
@@ -1210,8 +1271,9 @@ if ($DATA['_step'] + 1 === 4) {
     if (isset($_GET['websitesettings'])) {
         $NEW_WEBSITE_SETTINGS = [];
         $NEW_WEBSITE_SETTINGS['title'] = $_POST['website_title'];
-        $NEW_WEBSITE_SETTINGS['theme']  = $_POST['website_theme'];
-        $NEW_WEBSITE_SETTINGS['url']  = getScriptBaseURL();
+        $NEW_WEBSITE_SETTINGS['theme'] = $_POST['website_theme'];
+        $NEW_WEBSITE_SETTINGS['url'] = getScriptBaseURL();
+        $NEW_WEBSITE_SETTINGS['lang'] = $_POST['website_lang'];
 
         if (empty($NEW_WEBSITE_SETTINGS['title'])) {
             $message_websitesettings = '<p class="message error">Please enter a website title!</p>';
@@ -1238,8 +1300,16 @@ if ($DATA['_step'] + 1 === 4) {
             <option value="aspect"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'aspect') ? ' selected' : '') . '>Aspect</option>
             <option value="skyline"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'skyline') ? ' selected' : '') . '>Skyline</option>
             <option value="minimal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'minimal') ? ' selected' : '') . '>Minimal</option>
-            <option value="classic"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'classic') ? ' selected' : '') . '>Classic</option>
             <option value="contrast"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'contrast') ? ' selected' : '') . '>Contrast</option>
+            <option value="ratio"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'ratio') ? ' selected' : '') . '>Ratio</option>
+            <option value="classic"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'classic') ? ' selected' : '') . '>Classic</option>
+        </select>
+    </p>
+    <p>
+        <label class="visible" for="website_lang">Website Language</label>
+        <select name="website_lang">
+            <option value="en"' . ((isset($_POST['website_lang']) && $_POST['website_lang'] === 'en') ? ' selected' : '') . '>English</option>
+            <option value="de"' . ((isset($_POST['website_lang']) && $_POST['website_lang'] === 'de') ? ' selected' : '') . '>German</option>
         </select>
     </p>
 </fieldset>
@@ -1251,7 +1321,10 @@ if ($DATA['_step'] + 1 === 4) {
 
 </p>
 ' . $message_websitesettings . '
-</form>';
+</form>
+<p>
+    <span class="textsmall">After installation, you can completely adapt the language of your website by editing the language file ("/storage/system/lang.php").</span>
+</p>';
 }
 
 //#### Step 5 - Install ########################################################
@@ -1316,7 +1389,7 @@ if (isset($_GET['migratekoken2'])) {
     CopyKokenOriginals(__DIR__ . '/_koken/storage/originals', __DIR__ . '/storage/originals');
     FixOriginalPhotos(str_replace('install.php', 'listener/FixOriginalPhotos.php', (empty($_SERVER['HTTPS']) ? 'http://' : 'https://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']));
     unlink(__DIR__ . '/install.php');
-    $message_migratekoken = '<p class="message success">Congratulations, your Koken data has been migrated and your <a href="' . getScriptBaseURL() . '" target="_blank">new portfolio website</a> is online. Check if all your photos have been migrated using the <a href="' . getScriptBaseURL() . '/listener/FixOriginalPhotos.php" target="_blank">FixOriginalPhotos script</a>. Please recreate your website\'s navigation menu in your <a href="' . getScriptBaseURL() . '/admin/" target="_blank">Admin Panel (CMS)</a>.<br>Take a look at our <a href="https://www.io200.com/documentation#migration-koken" target="_blank">documentation</a>, if there are any problems with the migration (i.e. portfolio is not loading or showing any photos after logging in your admin panel).</p>';
+    $message_migratekoken = '<p class="message success">Congratulations, your Koken data has been migrated and your <a href="' . getScriptBaseURL() . '" target="_blank">new portfolio website</a> is online. Check if all your photos have been migrated using the <a href="' . getScriptBaseURL() . '/listener/FixOriginalPhotos.php" target="_blank">FixOriginalPhotos script</a>. Please recreate your website\'s navigation menu in your <a href="' . getScriptBaseURL() . '/admin/" target="_blank">Admin Panel (CMS)</a>.<br>Take a look at our <a href="https://www.io200.com/documentation#migration-koken" target="_blank">documentation</a>, if there are any problems with the migration (i.e. photos are not loading after logging in your admin panel).</p>';
 
     $output = '
 <form>
@@ -1345,8 +1418,8 @@ if (isset($_GET['migratekoken2'])) {
         document.addEventListener("touchstart", function() {}, true);
     </script>
     <style>
-        /*----------FONTS--------------------------------------------------------------------------*/
-		@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
+    /*----------FONTS--------------------------------------------------------------------------*/
+	@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
 
 	/*----------RESET-------------------------------------------------------------------------*/
 	html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video {margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline;}
