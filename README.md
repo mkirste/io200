@@ -11,14 +11,14 @@
 ## Installation
 
 ### Automatic Installation
-Upload the installation file to your webspace and open the following URL in your browser: www.yourwebsite.com/install.php
+Upload the installation file (install.php) to your webspace and open the following URL in your browser: www.yourwebsite.com/install.php
 
 ### Manual Installation
 Download IO200 Distribution and follow the [manual installation steps](https://www.io200.com/documentation#installation-manual) in the documentation.
 <br /><br />
 
 ## Requirements
-Domain name, webspace supporting PHP 7.3 or higher, MySQL or MariaDB database
+Domain name, webspace supporting PHP 7.4 or higher, MySQL or MariaDB database
 <br /><br />
 
 ## Resources
