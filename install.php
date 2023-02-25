@@ -4,7 +4,6 @@ ini_set('display_errors', false);
 ini_set('max_execution_time', 120); // 120 seconds
 define('CMS_TABLES', ['cms_articles', 'cms_articles_categories', 'cms_articles_tags', 'cms_categories', 'cms_collections', 'cms_collections_coverphotos', 'cms_collections_photos', 'cms_comments', 'cms_links', 'cms_pages', 'cms_photos', 'cms_photos_categories', 'cms_photos_tags', 'cms_tags']);
 define('ENDPOINT_URL', 'https://www.service.io200.com/api/v1/');
-define('DOWNLOAD_URL', 'https://www.io200.com/storage/downloads/');
 
 
 /*
@@ -577,7 +576,51 @@ function getPHPVersion() {
     return PHP_VERSION;
 }
 function checkPHPVersion() {
-    return version_compare(PHP_VERSION, '7.3') >= 0;
+    return version_compare(PHP_VERSION, '7.4') >= 0;
+}
+function getMissingPHPExtensions() {
+	$required_extensions = ['mbstring', 'zip', 'curl', 'gd', 'mysqli', 'date', 'fileinfo', 'hash', 'json', 'pcre']; // 'imagick'
+	$available_extensions = get_loaded_extensions();
+
+	$missing_extensions = array_diff($required_extensions, $available_extensions);
+	
+	// gd or imagick must have JPEG/WebP support
+	$imageprocessing_formats = false;
+	if(in_array('gd', $available_extensions) && checkImageProcessingGD() === true){
+		$imageprocessing_formats = true;
+	}
+	if(in_array('imagick', $available_extensions) && checkImageProcessingImagick() === true){
+		$imageprocessing_formats = true;
+	}
+	if($imageprocessing_formats === false){
+		if(!in_array('gd', $missing_extensions)){array_push($missing_extensions, 'gd');}
+	}
+	
+	return $missing_extensions;
+}
+function checkPHPExtensions() {
+	return count(getMissingPHPExtensions()) === 0;
+}
+function getWrongSettings() {
+	$wrong_settings = [];
+	
+	//if(!ini_get('allow_url_fopen')) {
+	//	array_push($wrong_settings, "'allow_url_fopen' must be on");
+	//}
+
+	return $wrong_settings;
+}
+function checkPHPSettings() {
+	return count(getWrongSettings()) === 0;
+}
+function checkImageProcessing() {
+    return checkImageProcessingImagick() || checkImageProcessingGD();
+}
+function checkImageProcessingGD() {
+    return function_exists('gd_info') && gd_info()['JPEG Support'] && gd_info()['WebP Support'];
+}
+function checkImageProcessingImagick() {
+    return class_exists('Imagick') && count(Imagick::queryformats('JPEG')) > 0 && count(Imagick::queryformats('WEBP')) > 0;
 }
 function printImageProcessingLibrarys() {
     if (checkImageProcessing() === false) {
@@ -587,22 +630,6 @@ function printImageProcessingLibrarys() {
     }
 
     $librarys = [];
-    if (function_exists('gd_info')) {
-        $class = checkImageProcessingGD() ? 'success' : $class_error;
-        $version = '';
-        $formats = [];
-        if (function_exists('gd_info')) {
-            $version = gd_info()['GD Version'];
-            if (gd_info()['JPEG Support']) {
-                array_push($formats, 'JPEG');
-            }
-            if (gd_info()['WebP Support']) {
-                array_push($formats, 'WebP');
-            }
-        }
-
-        array_push($librarys, '<span class="textsmall ' . $class . '"><b>GD ' . $version . '</b> ' . (count($formats) > 0 ? '(' . implode(', ', $formats) . ')' : '') . '</span>');
-    }
     if (class_exists("Imagick")) {
         $class = checkImageProcessingImagick() ? 'success' : $class_error;
         $formats = [];
@@ -618,6 +645,19 @@ function printImageProcessingLibrarys() {
         }
         array_push($librarys, '<span class="textsmall ' . $class . '"><b>ImageMagick ' . $version . '</b> ' . (count($formats) > 0 ? '(' . implode(', ', $formats) . ')' : '') . '</span>');
     }
+    if (function_exists('gd_info')) {
+        $class = checkImageProcessingGD() ? 'success' : $class_error;
+        $version = gd_info()['GD Version'];
+        $formats = [];
+		if (gd_info()['JPEG Support']) {
+			array_push($formats, 'JPEG');
+		}
+		if (gd_info()['WebP Support']) {
+			array_push($formats, 'WebP');
+		}
+
+        array_push($librarys, '<span class="textsmall ' . $class . '"><b>GD ' . $version . '</b> ' . (count($formats) > 0 ? '(' . implode(', ', $formats) . ')' : '') . '</span>');
+    }
 
     if (count($librarys) > 0) {
         $result = '<br/> ' . implode(',<br/> ', $librarys);
@@ -626,14 +666,19 @@ function printImageProcessingLibrarys() {
     }
     return $result;
 }
-function checkImageProcessing() {
-    return checkImageProcessingGD() || checkImageProcessingImagick();
+function checkHTTPS() {
+    return connection_has_ssl();
 }
-function checkImageProcessingGD() {
-    return function_exists('gd_info') && gd_info()['JPEG Support'] && gd_info()['WebP Support'];
-}
-function checkImageProcessingImagick() {
-    return class_exists('Imagick') && count(Imagick::queryformats('JPEG')) > 0 && count(Imagick::queryformats('WEBP')) > 0;
+function checkKokenSubfolder() {
+	$webspace_has_koken_parentfolder = str_ends_with(__DIR__, "/koken");
+	$url_has_koken_folder = str_ends_with(getScriptBaseURL(), "/koken");
+	
+	$webspace_koken_parentfolder_has_htaccess = false;
+	if($webspace_has_koken_parentfolder === true){
+		$webspace_koken_parentfolder_has_htaccess = file_exists(__DIR__ . "/../.htaccess");
+	}
+
+	return !($webspace_has_koken_parentfolder && $webspace_koken_parentfolder_has_htaccess && !$url_has_koken_folder);
 }
 function checkInstallFolder() {
     return count(array_diff(scandir(__DIR__), ['.', '..', 'install.php', 'dist.zip', '_koken'])) === 0;
@@ -657,7 +702,7 @@ function InstallCheck($DATA) {
             }
         }
         if (count($available_cms_tables) > 0) {
-            return new ErrorInfo('', "CMS tables already existing (<i>" . implode(', ', $available_cms_tables) . "</i>).<br/><b>Please delete the tables before continuing (press F5)!</b>");
+            return new ErrorInfo('', "CMS database tables already existing (<i>" . implode(', ', $available_cms_tables) . "</i>).<br/><b>Please delete the tables from your database before continuing (press F5)!</b>");
         }
     }
 
@@ -789,6 +834,9 @@ function ConfigurateSystem($DATA) {
     $SITESETTINGS['WEBSITE_TITLE'] = $DATA['websitesettings']['title'];
     $SITESETTINGS['WEBSITE_MAIL'] =  $DATA['adminsettings']['mail'];
     $SITESETTINGS['WEBSITE_THEMENAME'] = $DATA['websitesettings']['theme'];
+	if($DATA['websitesettings']['theme'] === "frame"){
+		$SITESETTINGS['WEBSITE_THEMEMAXDESKTOPCONTENTWIDTH'] = "100%";
+	}
     $settings_file = fopen(__DIR__ . "/storage/system/sitesettings.json", 'w');
     $result = fwrite($settings_file, json_encode($SITESETTINGS));
     fclose($settings_file);
@@ -815,14 +863,14 @@ function ConfigurateSystem($DATA) {
 	
 	// /storage/system/lang.php
 	if($DATA['websitesettings']['lang'] !== 'en'){
-		$lang_downloadfile = 'lang-' . $DATA['websitesettings']['lang'] .'.zip';
-		
+		$lang_downloadfile = 'lang_' . $DATA['websitesettings']['lang'];
+	
 		// download
-		$fh = fopen(__DIR__ . '/lang.zip', 'w');
+		$fh = fopen(__DIR__ . '/lang.php', 'w');
         $ch = curl_init();
 		curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
         curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
-        curl_setopt($ch, CURLOPT_URL, DOWNLOAD_URL . $lang_downloadfile);
+		curl_setopt($ch, CURLOPT_URL, ENDPOINT_URL . 'download:' . $lang_downloadfile);
         curl_setopt($ch, CURLOPT_FILE, $fh);
         curl_exec($ch);
         $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
@@ -831,22 +879,16 @@ function ConfigurateSystem($DATA) {
         if ($response_code === 200) {
             clearstatcache();
 		}
-		if (!filesize(__DIR__ . '/lang.zip')) {
-			if (file_exists(__DIR__ . '/lang.zip')) {
-				unlink(__DIR__ . '/lang.zip');
+		if (!filesize(__DIR__ . '/lang.php')) {
+			if (file_exists(__DIR__ . '/lang.php')) {
+				unlink(__DIR__ . '/lang.php');
 			}
 		}		 
 
 		// extract
-		if (file_exists(__DIR__ . '/lang.zip')) {
-			$zip = new ZipArchive;
-			if ($zip->open(__DIR__ . '/lang.zip') === true) {
-				$zip->extractTo(__DIR__);
-				$zip->close();
-				copy(__DIR__ . '/lang.php', __DIR__ . '/storage/system/lang.php');
-				unlink(__DIR__ . '/lang.php');
-				unlink(__DIR__ . '/lang.zip');
-			}
+		if (file_exists(__DIR__ . '/lang.php')) {	
+			copy(__DIR__ . '/lang.php', __DIR__ . '/storage/system/lang.php');
+			unlink(__DIR__ . '/lang.php');
 		}
 	}
 	
@@ -1048,43 +1090,50 @@ if (isset($_GET['migratekoken'])) {
     $DATA['_step'] = -1;
 }
 
-$output = null;
 
+$output = null;
 //#### Step 1 - Check System ########################################################
 if ($DATA['_step'] + 1 === 1) {
-    $koken_installation_deteted = DetectKokenInstallation(__DIR__);
-
     $message_systemcheck = '';
-    $message_systemcheck_system = '';
+    $message_systeminfo = '';
+    $koken_installation_deteted = DetectKokenInstallation(__DIR__);
 
     $CHECK['system'] = true;
     if (checkPHPVersion() === false) { // check php version
-        $CHECK['system'] = new ErrorInfo('', 'IO200 supports only PHP Version >= 7.3 (PHP Version ' . PHP_VERSION . ' detected)');
+        $CHECK['system'] = new ErrorInfo('', 'IO200 supports only PHP Version >= 7.4 (PHP Version ' . PHP_VERSION . ' detected)');
     }
-    if (checkImageProcessing() === false) { // check image processing
-        $CHECK['system'] = new ErrorInfo('', 'IO200 requires image processing (GD or ImageMagick library with JPEG and WebP support).');
+    if (checkPHPExtensions() === false) { // check php modules	
+		$missing_extensions = getMissingPHPExtensions();
+		$imageprocessingnotice = "";
+		if(in_array('gd', $missing_extensions)){
+			$imageprocessingnotice = " Image processing extensions ('gd' or 'imagick') require JPEG and WebP support.";
+		}
+        $CHECK['system'] = new ErrorInfo('', "IO200 requires the following PHP extensions: '" . implode("', '", $missing_extensions) . "'." . $imageprocessingnotice);
     }
+	if (checkPHPSettings() === false) { // check php modules	
+		$wrong_settings = getWrongSettings();
+		$CHECK['system'] = new ErrorInfo('', "IO200 requires the following PHP settings: " . implode(", ", $wrong_settings) . ".");
+	}
+    if (checkHTTPS() === false) { // check https
+        $CHECK['system'] = new ErrorInfo('', 'IO200 requires HTTPS support. Please activate a SSL certificate for your domain.');
+    }			
     if (ErrorInfo::isError($CHECK['system'])) {
-        $message_systemcheck_system = '<p class="message error"><b>System check failed!</b><br/>' . $CHECK['system']->message . '</p>';
+        $message_systeminfo = '<p class="message error"><b>System check failed!</b><br/>' . $CHECK['system']->message . '</p>';
     } else {
-        $message_systemcheck_system = '<p class="message success"><b>System check passed!</b></p>';
+        $message_systeminfo = '<p class="message success"><b>System check passed!</b></p>';
     }
 
     $CHECK['folder'] = false;
     if (isset($_GET['systemcheck'])) {
         $DATA['_migratekoken'] = (isset($_POST['migratekoken']) &&  $_POST['migratekoken'] === 'migratekoken');
-        //if (checkInstallFile() === false) { // check install file
-        //    $message_systemcheck = '<p class="message error">Install distribution file (dist.zip) missing in folder "<i>' . __DIR__ . '/</i>"! Please upload the provided dist.zip file.</p>';
-        //} else {
-        if ($DATA['_migratekoken'] === false && !checkInstallFolder()) {
+        if ($DATA['_migratekoken'] === false && checkInstallFolder() === false ) {
             $message_systemcheck = '<p class="message error">Installation folder "<i>' . __DIR__ . '</i>" is not empty! Please remove all files and folders in the installation folder (except install.php).</p>';
-        } else {
+		} else {
             $message_systemcheck = '<p class="message success"><b>All checks passed!</b></p>';
             $CHECK['folder'] = true;
             $DATA['systemcheck'] = true;
             $DATA['_step']++;
         }
-        //}
     }
 
     $message_kokenmigrationcheck = '';
@@ -1094,24 +1143,34 @@ if ($DATA['_step'] + 1 === 1) {
         }
     }
 
+	$message_kokenmigrationurlwarning = '';
+	if ($koken_installation_deteted === true && checkKokenSubfolder() === false){
+		$message_kokenmigrationurlwarning = '<p class="message warning">Please start the Koken migration via '. getScriptBaseURL() . '/koken/install.php (<a href="'. getScriptBaseURL() . '/koken/install.php">click here</a>).</p>';
+	}
+
+	
     $output = '
-<form action="' . getScriptBaseURL() . '/install.php?systemcheck" method="post">
+<form action="' . getScriptBaseURL() . '/install.php' . ($CHECK['system'] !== true ? '' : '?systemcheck') . '" method="post">
 <fieldset>
     <h2>System Check</h2>
-    <p>PHP Version: <b class=' . (checkPHPVersion() === false ? 'error' : 'success') . '>' . getPHPVersion() . '</b></p>
-    <p>Image Processing: ' . printImageProcessingLibrarys() . '</p>
+    <p>
+		PHP Version: <b class="' . (checkPHPVersion() === false ? 'error' : 'success') . '">' . getPHPVersion() . '</b><br>
+		PHP Extensions: ' . (checkPHPExtensions() === false ? '<b class="error">missing</b>' : '<b class="success">available</b>') . '<br>
+		HTTPS: ' . (checkHTTPS() === false ? '<b class="error">inactive</b>' : '<b class="success">active</b>') . '<br>
+	</p>
     <p class="checkbox' . ($koken_installation_deteted !== true ? ' checkbox-disabled' : '') . '">
         <input type="checkbox" name="migratekoken" id="migratekoken" value="migratekoken"' . ($koken_installation_deteted !== true ? ' disabled' : '') . '/>
         <label class="optionlabel" for="migratekoken">Migrate Koken installation' . ($koken_installation_deteted !== true ? ' [<a href="' . getScriptBaseURL() . '/install.php?checkkokenmigration">check</a>]' : '') . '</label>
     </p>
 </fieldset>
-' . $message_systemcheck_system . '
+' . $message_systeminfo . '
 <p>
     <input type="hidden" name="data_transfer" value="' . htmlspecialchars(json_encode($DATA)) . '">
-    <input type="submit" value="Continue"' . ($CHECK['system'] !== true ? ' disabled' : '') . '/>
+    <input type="submit" value="' . ($CHECK['system'] !== true ? ' Refresh' : 'Continue') . '"/>
 </p>
 ' . $message_systemcheck . '
 ' . $message_kokenmigrationcheck . '
+' . $message_kokenmigrationurlwarning . '
 </form>
 <p>
     <span class="textsmall">By clicking "Continue", you agree to our<br> <a href="https://www.io200.com/privacypolicy" target="_blank">Privacy Policy</a> and <a href="https://www.io200.com/terms" target="_blank">Terms and Conditions</a>.</span>
@@ -1297,13 +1356,16 @@ if ($DATA['_step'] + 1 === 4) {
     <p>
         <label class="visible" for="website_theme">Website Theme</label>
         <select name="website_theme">
-            <option value="aspect"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'aspect') ? ' selected' : '') . '>Aspect</option>
-            <option value="skyline"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'skyline') ? ' selected' : '') . '>Skyline</option>
             <option value="minimal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'minimal') ? ' selected' : '') . '>Minimal</option>
+            <option value="aspect"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'aspect') ? ' selected' : '') . '>Aspect</option>
+            <option value="frame"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'frame') ? ' selected' : '') . '>Frame</option>
+            <option value="skyline"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'skyline') ? ' selected' : '') . '>Skyline</option>
+            <option value="journal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'journal') ? ' selected' : '') . '>Journal</option>
             <option value="contrast"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'contrast') ? ' selected' : '') . '>Contrast</option>
             <option value="ratio"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'ratio') ? ' selected' : '') . '>Ratio</option>
             <option value="classic"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'classic') ? ' selected' : '') . '>Classic</option>
-        </select>
+        </select><br>
+		<img id="theme-preview-image" src="https://www.io200.com/storage/themes/portfolio-site-minimal-theme.thumb.jpg" width="600" height="400" style="width:80%;height:auto;margin:0.25em auto 1em auto;">
     </p>
     <p>
         <label class="visible" for="website_lang">Website Language</label>
@@ -1324,7 +1386,18 @@ if ($DATA['_step'] + 1 === 4) {
 </form>
 <p>
     <span class="textsmall">After installation, you can completely adapt the language of your website by editing the language file ("/storage/system/lang.php").</span>
-</p>';
+</p>
+
+<script>
+var themeSelect = document.querySelector("select[name=website_theme]");
+var themePreviewImage = document.getElementById("theme-preview-image");
+themeSelect.addEventListener(\'change\', function(event) {
+  if (themePreviewImage) {
+    themePreviewImage.src = `https://www.io200.com/storage/themes/portfolio-site-${event.target.value}-theme.thumb.jpg`;
+  }
+});
+
+</script>';
 }
 
 //#### Step 5 - Install ########################################################
@@ -1390,6 +1463,9 @@ if (isset($_GET['migratekoken2'])) {
     FixOriginalPhotos(str_replace('install.php', 'listener/FixOriginalPhotos.php', (empty($_SERVER['HTTPS']) ? 'http://' : 'https://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']));
     unlink(__DIR__ . '/install.php');
     $message_migratekoken = '<p class="message success">Congratulations, your Koken data has been migrated and your <a href="' . getScriptBaseURL() . '" target="_blank">new portfolio website</a> is online. Check if all your photos have been migrated using the <a href="' . getScriptBaseURL() . '/listener/FixOriginalPhotos.php" target="_blank">FixOriginalPhotos script</a>. Please recreate your website\'s navigation menu in your <a href="' . getScriptBaseURL() . '/admin/" target="_blank">Admin Panel (CMS)</a>.<br>Take a look at our <a href="https://www.io200.com/documentation#migration-koken" target="_blank">documentation</a>, if there are any problems with the migration (i.e. photos are not loading after logging in your admin panel).</p>';
+	if(str_ends_with(getScriptBaseURL(), "/koken")){
+		$message_migratekoken .= '<p class="message">Please follow the steps in the documentation to <a href="https://www.io200.com/documentation#customizing-moveinstallation" target="_blank">move the installation from ' . getScriptBaseURL() . ' to ' . str_replace('/koken', '', getScriptBaseURL()) . '</a>.</p>';
+	}
 
     $output = '
 <form>
@@ -1522,7 +1598,8 @@ if (isset($_GET['migratekoken2'])) {
 	section form label.optionlabel{font-size:0.95em;}
 	section form p.message{font-size:0.9em;width:100%;padding:0.4em;margin-top:0.75em;line-height:1.5em;display:inline-block;box-sizing:border-box;}
 	section form p.checkbox-disabled{opacity:0.6;}
-	section form input:not([type="submit"]):not([type="reset"]),.section form select,.section form textarea{text-align:center;color:#454545;font-weight:300;border:1px solid #eeeeee;}
+	section form input:not([type="submit"]):not([type="reset"]), section form select, section form textarea{color:#454545;font-weight:300;border:1px solid #eeeeee;}
+	section form input:not([type="submit"]):not([type="reset"]), section form textarea{text-align:center;}
 	section form input:read-only:not([type="submit"]):not([type="reset"]){border:1px solid #fff;}
 	section form input:not([type="checkbox"]){width:100%;padding:0.8em!important;}
 	section form input[type="checkbox"]{position:relative;top:0.05em;}
@@ -1530,25 +1607,31 @@ if (isset($_GET['migratekoken2'])) {
 	section form input[type="submit"]:hover{background:#000;color:#fff;}
 	section form input.hoverdanger[type="submit"]:hover{background:#cb0000;}
 	section form input[type="submit"]:disabled{background:#d8d8d8;color:#fcfcfc;}
-	section form .error{color:#cb0000;}
-	section form .error a{color:#cb0000;text-decoration:underline;}
-	section form .error a:hover{color:#9c0000;}
 	section form .success{color:#009920;}
 	section form .success a{color:#0a8924;text-decoration:underline;}
 	section form .success a:hover{color:#002f0a;}
-	section form .message.error{background-color:rgba(203, 0, 0, 0.2);}
+	section form .warning{color:#b4a01c;}
+	section form .warning a{color:#b4a01c;text-decoration:underline;}
+	section form .warning a:hover{color:#8c7c15;}
+	section form .error{color:#cb0000;}
+	section form .error a{color:#cb0000;text-decoration:underline;}
+	section form .error a:hover{color:#9c0000;}
 	section form .message.success{background-color:rgba(0, 153, 32, 0.15);}
+	section form .message.warning {background-color:#fffade;}
+	section form .message.error{background-color:rgba(203, 0, 0, 0.2);}
     </style>
     <style>
-        section form {
+        section > form {
             width: 24em;
         }
-
+        section > p span.textsmall {
+			max-width: 30em;
+        }
+		
         section p span.textsmall {
             display: inline-block;
             line-height: 1.6em;
         }
-
         .waitmessage {
             display: none;
         }
