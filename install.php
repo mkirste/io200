@@ -1,11 +1,10 @@
 <?php
-error_reporting(0); // E_ERROR
-ini_set('display_errors', false);
+error_reporting(E_ERROR); // E_ERROR
+ini_set('display_errors', true);
 ini_set('max_execution_time', 120); // 120 seconds
 define('CMS_TABLES', ['cms_articles', 'cms_articles_categories', 'cms_articles_tags', 'cms_categories', 'cms_collections', 'cms_collections_coverphotos', 'cms_collections_photos', 'cms_comments', 'cms_links', 'cms_pages', 'cms_photos', 'cms_photos_categories', 'cms_photos_tags', 'cms_tags']);
 define('ENDPOINT_URL', 'https://www.service.io200.com/api/v1/');
-
-
+define('REQUIRE_SSL', false);
 /*
 Copyright (c) Michael Kirste, https://www.io200.com/terms
 
@@ -34,11 +33,29 @@ function connection_has_ssl() {
 		if (strtolower($_SERVER['HTTPS']) == "on" || $_SERVER['HTTPS'] == "1") {
 			return true;
 		}
-	} elseif (isset($_SERVER['SERVER_PORT'])) {
+	}
+	if (isset($_SERVER['SERVER_PORT'])) {
 		if ($_SERVER['SERVER_PORT'] == "443") {
 			return true;
 		}
 	}
+	// ssl certificate handled by a reverse proxy 
+	if (isset($_SERVER['HTTP_X_FORWARDED_PROTO'])) {
+		if ($_SERVER['HTTP_X_FORWARDED_PROTO'] == "https") {
+			return true;
+		}
+	}
+	if (isset($_SERVER['HTTP_X_FORWARDED_PORT'])) {
+		if ($_SERVER['HTTP_X_FORWARDED_PORT'] == "443") {
+			return true;
+		}
+	}
+	if (isset($_SERVER['HTTP_X_FORWARDED_SSL'])) {
+		if ($_SERVER['HTTP_X_FORWARDED_SSL'] == "on") {
+			return true;
+		}
+	}
+
 	return false;
 }
 function domain_has_ssl_certificate($domain) {
@@ -47,11 +64,11 @@ function domain_has_ssl_certificate($domain) {
     if ($ssl_check) { fclose( $ssl_check ); }
     return $res;
 }
-if (!isset($_GET) || empty($_GET)){
+if (!isset($_GET) || empty($_GET)){ // redirect to https if available
 	if(connection_has_ssl() === false){
 		if(domain_has_ssl_certificate($_SERVER['HTTP_HOST']) === true){
 			header("Location: https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']. "?ssl");			
-		}		
+		}
 	}
 }
 
@@ -126,6 +143,10 @@ class DatabaseConnection {
         if ($this->_status === true) {
             $this->_connection->close();
         }
+    }
+
+    public function SERVERINFO() {
+        return $this->_connection->server_info;
     }
 
 
@@ -543,10 +564,11 @@ function xcopy($src, $dest) {
     foreach (scandir($src) as $object) {
         if (!in_array($object, ['.', '..'])) {
             if (is_dir($src . '/' . $object)) {
-                if(!is_dir($dest . '/' . $object)){mkdir($dest . '/' . $object);}
+                if(!is_dir($dest . '/' . $object)){mkdir($dest . '/' . $object, 0755);}
                 xcopy($src . '/' . $object, $dest . '/' . $object);
             } else {
                 copy($src . '/' . $object, $dest . '/' . $object);
+				chmod( $dest . '/' . $object, 0644);
             }
         }
     }
@@ -570,7 +592,7 @@ function rrmdir($dir) {
 //#### SCRIPT ###########################################################
 //#######################################################################
 function getScriptBaseURL() {
-    return str_replace('/install.php', '', (empty($_SERVER['HTTPS']) ? 'http://' : 'https://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']);
+    return str_replace('/install.php', '', (connection_has_ssl() ? 'https://' : 'http://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']);
 }
 function getPHPVersion() {
     return PHP_VERSION;
@@ -579,51 +601,60 @@ function checkPHPVersion() {
     return version_compare(PHP_VERSION, '7.4') >= 0;
 }
 function getMissingPHPExtensions() {
-	$required_extensions = ['mbstring', 'zip', 'curl', 'gd', 'mysqli', 'date', 'fileinfo', 'hash', 'json', 'pcre']; // 'imagick'
+	$required_extensions = ['date', 'fileinfo', 'hash', 'json', 'mbstring', 'mysqli', 'pcre']; // 'curl', 'zip', 'gd', 'imagick'
 	$available_extensions = get_loaded_extensions();
-
 	$missing_extensions = array_diff($required_extensions, $available_extensions);
 	
-	// gd or imagick must have JPEG/WebP support
+	// gd or imagick must have JPEG/WebP (optional) support
 	$imageprocessing_formats = false;
-	if(in_array('gd', $available_extensions) && checkImageProcessingGD() === true){
+	if(in_array('gd', $available_extensions) && checkImageProcessingGD(false) === true){
 		$imageprocessing_formats = true;
 	}
-	if(in_array('imagick', $available_extensions) && checkImageProcessingImagick() === true){
+	if(in_array('imagick', $available_extensions) && checkImageProcessingImagick(false) === true){
 		$imageprocessing_formats = true;
 	}
 	if($imageprocessing_formats === false){
-		if(!in_array('gd', $missing_extensions)){array_push($missing_extensions, 'gd');}
+		array_push($missing_extensions, 'gd or imagick');
 	}
 	
+	return $missing_extensions;
+}
+function getMissingPHPExtensionsForInstall() {
+	$required_extensions = ['curl', 'zip'];
+	$available_extensions = get_loaded_extensions();
+	$missing_extensions = array_diff($required_extensions, $available_extensions);
+
 	return $missing_extensions;
 }
 function checkPHPExtensions() {
 	return count(getMissingPHPExtensions()) === 0;
 }
-function getWrongSettings() {
-	$wrong_settings = [];
+function isCurlAvailable(){
+	return function_exists('curl_version');
+}
+function getIncorrectPHPSettings() {
+	$incorrect_settings = [];
 	
 	//if(!ini_get('allow_url_fopen')) {
-	//	array_push($wrong_settings, "'allow_url_fopen' must be on");
+	//	array_push($incorrect_settings, "'allow_url_fopen' must be on");
 	//}
 
-	return $wrong_settings;
+	return $incorrect_settings;
 }
 function checkPHPSettings() {
-	return count(getWrongSettings()) === 0;
+	return count(getIncorrectPHPSettings()) === 0;
 }
-function checkImageProcessing() {
-    return checkImageProcessingImagick() || checkImageProcessingGD();
+function checkImageProcessing($require_webp = true) {
+    return checkImageProcessingImagick($require_webp) || checkImageProcessingGD($require_webp);
 }
-function checkImageProcessingGD() {
-    return function_exists('gd_info') && gd_info()['JPEG Support'] && gd_info()['WebP Support'];
+function checkImageProcessingGD($require_webp = true) {
+    return function_exists('gd_info') && gd_info()['JPEG Support'] && (gd_info()['WebP Support'] || !$require_webp);
 }
-function checkImageProcessingImagick() {
-    return class_exists('Imagick') && count(Imagick::queryformats('JPEG')) > 0 && count(Imagick::queryformats('WEBP')) > 0;
+function checkImageProcessingImagick($require_webp = true) {
+    return class_exists('Imagick') && count(Imagick::queryformats('JPEG')) > 0 && (count(Imagick::queryformats('WEBP')) > 0 || !$require_webp);
 }
 function printImageProcessingLibrarys() {
-    if (checkImageProcessing() === false) {
+    if (checkImageProcessing(false) === false) {
         $class_error = 'error';
     } else {
         $class_error = '';
@@ -667,18 +698,22 @@ function printImageProcessingLibrarys() {
     return $result;
 }
 function checkHTTPS() {
+	//return true;
     return connection_has_ssl();
 }
 function checkKokenSubfolder() {
-	$webspace_has_koken_parentfolder = str_ends_with(__DIR__, "/koken");
+	$ftp_has_koken_parentfolder = str_ends_with(__DIR__, "/koken");
 	$url_has_koken_folder = str_ends_with(getScriptBaseURL(), "/koken");
 	
-	$webspace_koken_parentfolder_has_htaccess = false;
-	if($webspace_has_koken_parentfolder === true){
-		$webspace_koken_parentfolder_has_htaccess = file_exists(__DIR__ . "/../.htaccess");
+	$ftp_koken_parentfolder_has_htaccess = false;
+	if($ftp_has_koken_parentfolder === true){
+		$ftp_koken_parentfolder_has_htaccess = file_exists(__DIR__ . "/../.htaccess");
 	}
 
-	return !($webspace_has_koken_parentfolder && $webspace_koken_parentfolder_has_htaccess && !$url_has_koken_folder);
+	return !($ftp_has_koken_parentfolder && $ftp_koken_parentfolder_has_htaccess && !$url_has_koken_folder);
+}
+function checkInstallPath() {
+	return is_dir(__DIR__) === true && scandir(__DIR__) !== false;
 }
 function checkInstallFolder() {
     return count(array_diff(scandir(__DIR__), ['.', '..', 'install.php', 'dist.zip', '_koken'])) === 0;
@@ -709,51 +744,74 @@ function InstallCheck($DATA) {
 	// Files	
 	$test_file = fopen(__DIR__ . '/test.json', 'w');
 	if($test_file === false){
-		return new ErrorInfo('', "Cannot open files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+		return new ErrorInfo('', "Cannot open files. Try to assign access permissions (chmod) to install.php file and the folder that contains it or contact us!");
 	}
     $result = fwrite($test_file, json_encode(['test' => 'test']));
 	if($result === false){
-		return new ErrorInfo('', "Cannot write files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+		return new ErrorInfo('', "Cannot write files. Try to assign access permissions (chmod) to install.php file and the folder that contains it or contact us!");
 	}else{
 		fclose($test_file);
 	}
 	if (file_exists(__DIR__ . '/test.json')) {
 		$result = unlink(__DIR__ . '/test.json');
 		if($result === false){
-			return new ErrorInfo('', "Cannot delete files. Try to assign install.php file more access permissions (CHMOD) or contact us!");
+			return new ErrorInfo('', "Cannot delete files. Try to assign access permissions (chmod) to install.php file and the folder that contains it or contact us!");
 		}
 	}
 	
     return true;
 }
 function InstallSystem($DATA) {
+	// set memory limit
+	$parseStringBytes = function ($size_string) {
+		$unit = preg_replace('/[^bkmgtpezy]/i', '', $size_string);
+		$size = preg_replace('/[^0-9\.]/', '', $size_string);
+		if (!empty($unit)) {
+			return round($size * pow(1024, stripos('bkmgtpezy', $unit[0])));
+		} else {
+			return round($size);
+		}
+	};
+	if (function_exists('ini_get') && function_exists('ini_set')) {
+		$memorylimit_available = ini_get('memory_limit');
+		$memorylimit_required = '128M';
+		if ($parseStringBytes($memorylimit_required) > $parseStringBytes($memorylimit_available)) {
+			ini_set('memory_limit', "{$memorylimit_required}");
+		}
+	}	
+	
     // download dist.zip
     if (!file_exists(__DIR__ . '/dist.zip')) {
-        $fh = fopen(__DIR__ . '/dist.zip', 'w');
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
-        curl_setopt($ch, CURLOPT_URL, ENDPOINT_URL . 'download:distribution?install');
-        curl_setopt($ch, CURLOPT_FILE, $fh);
-        curl_exec($ch);
-        $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
-        fclose($fh);
+		if(isCurlAvailable()){
+			$fh = fopen(__DIR__ . '/dist.zip', 'w');
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+			curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
+			curl_setopt($ch, CURLOPT_URL, ENDPOINT_URL . 'download:distribution?install');
+			curl_setopt($ch, CURLOPT_FILE, $fh);
+			curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 25);
+			curl_exec($ch);
+			$response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+			curl_close($ch);
+			fclose($fh);
 
-        if ($response_code === 200) {
-            clearstatcache();
-            if (!filesize(__DIR__ . "/dist.zip")) {
-                if (file_exists(__DIR__ . '/dist.zip')) {
-                    unlink(__DIR__ . '/dist.zip');
-                }
-                return new ErrorInfo('', 'System install error (cannot download dist.zip)!');
-            }
-        } else {
-			if (file_exists(__DIR__ . '/dist.zip')) {
-				unlink(__DIR__ . "/dist.zip");
+			if ($response_code === 200) {
+				clearstatcache();
+				if (!filesize(__DIR__ . "/dist.zip")) {
+					if (file_exists(__DIR__ . '/dist.zip')) {
+						unlink(__DIR__ . '/dist.zip');
+					}
+					return new ErrorInfo('', 'System install error (cannot download dist.zip)!<br><a href="' . ENDPOINT_URL . 'download:distribution" target="_blank">Download the IO200 Distribution (click here)</a> and upload the file (dist.zip) to the same directory as your installation file (install.php). Then, start this automatic installation again.');
+				}
+			} else {
+				if (file_exists(__DIR__ . '/dist.zip')) {
+					unlink(__DIR__ . "/dist.zip");
+				}
+				return new ErrorInfo('', 'System install error (cannot download dist.zip)!<br><a href="' . ENDPOINT_URL . 'download:distribution" target="_blank">Download the IO200 Distribution (click here)</a> and upload the file (dist.zip) to the same directory as your installation file (install.php). Then, start this automatic installation again.');
 			}
-            return new ErrorInfo('', 'System install error (cannot download dist.zip)!');
-        }
+		} else {
+				return new ErrorInfo('', 'System install error (curl is not available)!<br><a href="' . ENDPOINT_URL . 'download:distribution" target="_blank">Download the IO200 Distribution (click here)</a> and upload the file (dist.zip) to the same directory as your installation file (install.php). Then, start this automatic installation again.');				
+		}
     }
 
     // extract files
@@ -797,7 +855,10 @@ function ConfigurateSystem($DATA) {
         $new_config = str_replace("define('CMS_SECRETKEY', '???');", "define('CMS_SECRETKEY', '" . substr(str_shuffle(str_repeat($x = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*(){}[],./?', ceil(32 / strlen($x)))), 1, 32) . "');", $new_config);
         $new_config = str_replace("define('WEBSITE_SECRETKEY', '???');", "define('WEBSITE_SECRETKEY', '" . substr(str_shuffle(str_repeat($x = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*(){}[],./?', ceil(16 / strlen($x)))), 1, 16) . "');", $new_config);
         $new_config = str_replace("define('WEBSITE_URL', '???');", "define('WEBSITE_URL', '" . $DATA['websitesettings']['url'] . "');", $new_config);
-
+		if($DATA['_migratekoken'] === true){
+			$new_config = str_replace("define('CMS_ORIGINAL_IMAGE_SUBFOLDERDEPTH', 3);", "define('CMS_ORIGINAL_IMAGE_SUBFOLDERDEPTH', 2);", $new_config);
+		}
+		
         $config_file = fopen(__DIR__ . '/storage/system/config.php', 'w');
         $result = fwrite($config_file, $new_config);
         fclose($config_file);
@@ -832,10 +893,13 @@ function ConfigurateSystem($DATA) {
     // /storage/system/sitesettings.json
     $SITESETTINGS = [];
     $SITESETTINGS['WEBSITE_TITLE'] = $DATA['websitesettings']['title'];
-    $SITESETTINGS['WEBSITE_MAIL'] =  $DATA['adminsettings']['mail'];
+    $SITESETTINGS['WEBSITE_MAIL'] = $DATA['adminsettings']['mail'];
     $SITESETTINGS['WEBSITE_THEMENAME'] = $DATA['websitesettings']['theme'];
 	if($DATA['websitesettings']['theme'] === "frame"){
 		$SITESETTINGS['WEBSITE_THEMEMAXDESKTOPCONTENTWIDTH'] = "100%";
+	}
+	if(checkImageProcessing(true) === false){
+		  $SITESETTINGS['WEBSITE_CACHE_THUMBS'] = ['mimetype' => 'image/jpeg', 'sizes' => [48, 192, 624, 912, 1296, 1680, 2016, 2832], 'quality' => 75];
 	}
     $settings_file = fopen(__DIR__ . "/storage/system/sitesettings.json", 'w');
     $result = fwrite($settings_file, json_encode($SITESETTINGS));
@@ -866,32 +930,34 @@ function ConfigurateSystem($DATA) {
 		$lang_downloadfile = 'lang_' . $DATA['websitesettings']['lang'];
 	
 		// download
-		$fh = fopen(__DIR__ . '/lang.php', 'w');
-        $ch = curl_init();
-		curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
-		curl_setopt($ch, CURLOPT_URL, ENDPOINT_URL . 'download:' . $lang_downloadfile);
-        curl_setopt($ch, CURLOPT_FILE, $fh);
-        curl_exec($ch);
-        $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
-        fclose($fh);
-        if ($response_code === 200) {
-            clearstatcache();
-		}
-		if (!filesize(__DIR__ . '/lang.php')) {
-			if (file_exists(__DIR__ . '/lang.php')) {
+		if(isCurlAvailable()){
+			$fh = fopen(__DIR__ . '/lang.php', 'w');
+			$ch = curl_init();
+			curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
+			curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json; charset=UTF-8'));
+			curl_setopt($ch, CURLOPT_URL, ENDPOINT_URL . 'download:' . $lang_downloadfile);
+			curl_setopt($ch, CURLOPT_FILE, $fh);
+			curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 12);
+			curl_exec($ch);
+			$response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+			curl_close($ch);
+			fclose($fh);
+			if ($response_code === 200) {
+				clearstatcache();
+			}
+			if (!filesize(__DIR__ . '/lang.php')) {
+				if (file_exists(__DIR__ . '/lang.php')) {
+					unlink(__DIR__ . '/lang.php');
+				}
+			}		 
+
+			// extract
+			if (file_exists(__DIR__ . '/lang.php')) {	
+				copy(__DIR__ . '/lang.php', __DIR__ . '/storage/system/lang.php');
 				unlink(__DIR__ . '/lang.php');
 			}
-		}		 
-
-		// extract
-		if (file_exists(__DIR__ . '/lang.php')) {	
-			copy(__DIR__ . '/lang.php', __DIR__ . '/storage/system/lang.php');
-			unlink(__DIR__ . '/lang.php');
 		}
-	}
-	
+	}	
 
     return true;
 }
@@ -1031,22 +1097,50 @@ function FixNestedCollectionStructure($KOKEN_DATABASE) {
     }
     return true;
 }
-function FixOriginalPhotos($listener_url) {
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS | CURLPROTO_HTTP);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 0);
-    curl_setopt($ch, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
-    curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 120);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-    curl_setopt($ch, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
-    curl_setopt($ch, CURLOPT_URL, $listener_url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_exec($ch);
-    curl_close($ch);
+function FixKokenArticlesAndPages($KOKEN_DATABASE) {
+    $DatabaseConnection = new DatabaseConnection($KOKEN_DATABASE['hostname'], $KOKEN_DATABASE['username'], $KOKEN_DATABASE['password'], $KOKEN_DATABASE['database']);
 
-    return true;
+    $ARTICLES = $DatabaseConnection->QUERY2ARRAY("SELECT id, slug FROM cms_articles");
+	foreach ($ARTICLES as $ARTICLE) {
+		$content = $DatabaseConnection->GET("cms_articles", "content", 'id=' . $DatabaseConnection->ValueToEscapedString($ARTICLE['id']));
+		$content = preg_replace('/\[PHOTO label="([^"]*)"/', '[PHOTO', $content);
+		$content = preg_replace('/link="album" album="/', 'link="photosite" album="', $content);
+		$content = preg_replace('/\[IMG filename="/', '[IMG src="/storage/custom/', $content);
+		$DatabaseConnection->UPDATE('cms_articles', ['content' => $content], 'id=' . $DatabaseConnection->ValueToEscapedString($ARTICLE['id']));	
+	}
+
+    $PAGES = $DatabaseConnection->QUERY2ARRAY("SELECT id, slug FROM cms_pages");
+	foreach ($PAGES as $PAGE) {
+		$content = $DatabaseConnection->GET("cms_pages", "content", 'id=' . $DatabaseConnection->ValueToEscapedString($PAGE['id']));
+		$content = preg_replace('/\[PHOTO label="([^"]*)"/', '[PHOTO', $content);
+		$content = preg_replace('/link="album" album="/', 'link="photosite" album="', $content);
+		$content = preg_replace('/\[IMG filename="/', '[IMG src="/storage/custom/', $content);
+		$DatabaseConnection->UPDATE('cms_pages', ['content' => $content], 'id=' . $DatabaseConnection->ValueToEscapedString($PAGE['id']));	
+	}
+}
+function FixPhotos($listener_url) {
+	if(isCurlAvailable()){
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS | CURLPROTO_HTTP);
+		curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 0);
+		curl_setopt($ch, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS | CURLPROTO_HTTP);
+		curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+		curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+		if (defined('CURL_SSLVERSION_MAX_DEFAULT')) {
+			curl_setopt($ch, CURLOPT_SSLVERSION, CURL_SSLVERSION_MAX_DEFAULT);
+		} elseif (defined('CURL_SSLVERSION_TLSv1_2')) {
+			curl_setopt($ch, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+		}
+		curl_setopt($ch, CURLOPT_URL, $listener_url);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_exec($ch);
+		curl_close($ch);
+		return true;
+	}else{
+		return false;
+	}	
 }
 
 
@@ -1094,10 +1188,18 @@ if (isset($_GET['migratekoken'])) {
 $output = null;
 //#### Step 1 - Check System ########################################################
 if ($DATA['_step'] + 1 === 1) {
+	$message_installcheck = '';
     $message_systemcheck = '';
     $message_systeminfo = '';
-    $koken_installation_deteted = DetectKokenInstallation(__DIR__);
+	$message_sslwarning = '';
+    $koken_installation_detected = DetectKokenInstallation(__DIR__);
 
+	$CHECK['install'] = true;
+	if(count(getMissingPHPExtensionsForInstall()) > 0){
+		$message_installcheck = '<p class="message warning">Cannot start automatic installation due to missing PHP extensions (' . implode(", ", getMissingPHPExtensionsForInstall()) . '). Perform the manual installation as described in the documentation instead.</p>';
+		$CHECK['install'] = new ErrorInfo('', '');
+	}
+	
     $CHECK['system'] = true;
     if (checkPHPVersion() === false) { // check php version
         $CHECK['system'] = new ErrorInfo('', 'IO200 supports only PHP Version >= 7.4 (PHP Version ' . PHP_VERSION . ' detected)');
@@ -1105,18 +1207,23 @@ if ($DATA['_step'] + 1 === 1) {
     if (checkPHPExtensions() === false) { // check php modules	
 		$missing_extensions = getMissingPHPExtensions();
 		$imageprocessingnotice = "";
-		if(in_array('gd', $missing_extensions)){
-			$imageprocessingnotice = " Image processing extensions ('gd' or 'imagick') require JPEG and WebP support.";
+		if(in_array('gd or imagick', $missing_extensions)){
+			$imageprocessingnotice = " Image processing extensions ('gd' or 'imagick') require JPEG and WebP (optional) support.";
 		}
-        $CHECK['system'] = new ErrorInfo('', "IO200 requires the following PHP extensions: '" . implode("', '", $missing_extensions) . "'." . $imageprocessingnotice);
+        $CHECK['system'] = new ErrorInfo('', "IO200 requires the following missing PHP extensions: " . implode(", ", $missing_extensions) . "." . $imageprocessingnotice);
     }
 	if (checkPHPSettings() === false) { // check php modules	
-		$wrong_settings = getWrongSettings();
+		$wrong_settings = getIncorrectPHPSettings();
 		$CHECK['system'] = new ErrorInfo('', "IO200 requires the following PHP settings: " . implode(", ", $wrong_settings) . ".");
 	}
     if (checkHTTPS() === false) { // check https
-        $CHECK['system'] = new ErrorInfo('', 'IO200 requires HTTPS support. Please activate a SSL certificate for your domain.');
-    }			
+		if(REQUIRE_SSL){
+			$CHECK['system'] = new ErrorInfo('', 'IO200 requires HTTPS support. Please activate a SSL certificate for your domain.');		
+		} else {
+			$message_sslwarning = '<p class="message warning">We strongly recommend to activate HTTPS support (i.e. a SSL certificate for your domain).</p>';
+		}
+    }
+	
     if (ErrorInfo::isError($CHECK['system'])) {
         $message_systeminfo = '<p class="message error"><b>System check failed!</b><br/>' . $CHECK['system']->message . '</p>';
     } else {
@@ -1125,8 +1232,10 @@ if ($DATA['_step'] + 1 === 1) {
 
     $CHECK['folder'] = false;
     if (isset($_GET['systemcheck'])) {
-        $DATA['_migratekoken'] = (isset($_POST['migratekoken']) &&  $_POST['migratekoken'] === 'migratekoken');
-        if ($DATA['_migratekoken'] === false && checkInstallFolder() === false ) {
+        $DATA['_migratekoken'] = (isset($_POST['migratekoken']) && $_POST['migratekoken'] === 'migratekoken');
+		if(checkInstallPath() === false){
+            $message_systemcheck = '<p class="message error">Installation folder "<i>' . __DIR__ . '</i>" not found or missing permissions! Please check your PHP configuration or install the system in a subfolder.</p>';
+        } elseif ($DATA['_migratekoken'] === false && checkInstallFolder() === false) {
             $message_systemcheck = '<p class="message error">Installation folder "<i>' . __DIR__ . '</i>" is not empty! Please remove all files and folders in the installation folder (except install.php).</p>';
 		} else {
             $message_systemcheck = '<p class="message success"><b>All checks passed!</b></p>';
@@ -1138,13 +1247,13 @@ if ($DATA['_step'] + 1 === 1) {
 
     $message_kokenmigrationcheck = '';
     if (isset($_GET['checkkokenmigration'])) {
-        if ($koken_installation_deteted !== true) {
-            $message_kokenmigrationcheck = '<p class="message error">' . $koken_installation_deteted->message . '</p>';
+        if ($koken_installation_detected !== true) {
+            $message_kokenmigrationcheck = '<p class="message error">' . $koken_installation_detected->message . '</p>';
         }
     }
 
 	$message_kokenmigrationurlwarning = '';
-	if ($koken_installation_deteted === true && checkKokenSubfolder() === false){
+	if ($koken_installation_detected === true && checkKokenSubfolder() === false){
 		$message_kokenmigrationurlwarning = '<p class="message warning">Please start the Koken migration via '. getScriptBaseURL() . '/koken/install.php (<a href="'. getScriptBaseURL() . '/koken/install.php">click here</a>).</p>';
 	}
 
@@ -1156,19 +1265,21 @@ if ($DATA['_step'] + 1 === 1) {
     <p>
 		PHP Version: <b class="' . (checkPHPVersion() === false ? 'error' : 'success') . '">' . getPHPVersion() . '</b><br>
 		PHP Extensions: ' . (checkPHPExtensions() === false ? '<b class="error">missing</b>' : '<b class="success">available</b>') . '<br>
-		HTTPS: ' . (checkHTTPS() === false ? '<b class="error">inactive</b>' : '<b class="success">active</b>') . '<br>
+		' . (REQUIRE_SSL ? 'HTTPS: ' . (checkHTTPS() === false ? '<b class="">inactive</b>' : '<b class="success">active</b>') . '<br>' : '') . '
 	</p>
-    <p class="checkbox' . ($koken_installation_deteted !== true ? ' checkbox-disabled' : '') . '">
-        <input type="checkbox" name="migratekoken" id="migratekoken" value="migratekoken"' . ($koken_installation_deteted !== true ? ' disabled' : '') . '/>
-        <label class="optionlabel" for="migratekoken">Migrate Koken installation' . ($koken_installation_deteted !== true ? ' [<a href="' . getScriptBaseURL() . '/install.php?checkkokenmigration">check</a>]' : '') . '</label>
+    <p class="checkbox' . ($koken_installation_detected !== true ? ' checkbox-disabled' : '') . '">
+        <input type="checkbox" name="migratekoken" id="migratekoken" value="migratekoken"' . ($koken_installation_detected !== true ? ' disabled' : '') . '/>
+        <label class="optionlabel" for="migratekoken">Migrate Koken installation' . ($koken_installation_detected !== true ? ' [<a href="' . getScriptBaseURL() . '/install.php?checkkokenmigration">check</a>]' : '') . '</label>
     </p>
 </fieldset>
 ' . $message_systeminfo . '
 <p>
     <input type="hidden" name="data_transfer" value="' . htmlspecialchars(json_encode($DATA)) . '">
-    <input type="submit" value="' . ($CHECK['system'] !== true ? ' Refresh' : 'Continue') . '"/>
+    <input type="submit" value="' . ($CHECK['system'] !== true ? ' Refresh' : 'Continue') . '"' . ($CHECK['install'] !== true ? ' disabled' : ''). '/>
 </p>
+' . $message_installcheck . '
 ' . $message_systemcheck . '
+' . $message_sslwarning . '
 ' . $message_kokenmigrationcheck . '
 ' . $message_kokenmigrationurlwarning . '
 </form>
@@ -1262,8 +1373,8 @@ if ($DATA['_step'] + 1 === 3) {
 
     if (isset($_GET['adminsettings'])) {
         $NEW_ADMIN_SETTINGS = [];
-        $NEW_ADMIN_SETTINGS['mail']  = $_POST['admin_mail'];
-        $NEW_ADMIN_SETTINGS['password']  = $_POST['admin_password'];
+        $NEW_ADMIN_SETTINGS['mail'] = $_POST['admin_mail'];
+        $NEW_ADMIN_SETTINGS['password'] = $_POST['admin_password'];
         $NEW_ADMIN_SETTINGS['passwordrepetition']  = $_POST['admin_passwordrepetition'];
 
         if (
@@ -1356,22 +1467,23 @@ if ($DATA['_step'] + 1 === 4) {
     <p>
         <label class="visible" for="website_theme">Website Theme</label>
         <select name="website_theme">
-            <option value="minimal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'minimal') ? ' selected' : '') . '>Minimal</option>
-            <option value="aspect"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'aspect') ? ' selected' : '') . '>Aspect</option>
-            <option value="frame"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'frame') ? ' selected' : '') . '>Frame</option>
-            <option value="skyline"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'skyline') ? ' selected' : '') . '>Skyline</option>
-            <option value="journal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'journal') ? ' selected' : '') . '>Journal</option>
-            <option value="contrast"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'contrast') ? ' selected' : '') . '>Contrast</option>
-            <option value="ratio"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'ratio') ? ' selected' : '') . '>Ratio</option>
-            <option value="classic"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'classic') ? ' selected' : '') . '>Classic</option>
+            <option value="aspect"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'aspect') ? ' selected' : '') . '>Aspect (light)</option>
+            <option value="skyline"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'skyline') ? ' selected' : '') . '>Skyline (light, center)</option>
+            <option value="journal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'journal') ? ' selected' : '') . '>Journal (light, center)</option>
+            <option value="minimal"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'minimal') ? ' selected' : '') . '>Minimal (light, sidebar navigation)</option>
+            <option value="frame"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'frame') ? ' selected' : '') . '>Frame (light, fullsize)</option>
+            <option value="classic"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'classic') ? ' selected' : '') . '>Classic (light)</option>
+            <option value="contrast"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'contrast') ? ' selected' : '') . '>Contrast (dark)</option>
+            <option value="ratio"' . ((isset($_POST['website_theme']) && $_POST['website_theme'] === 'ratio') ? ' selected' : '') . '>Ratio (dark, center)</option>
         </select><br>
-		<img id="theme-preview-image" src="https://www.io200.com/storage/themes/portfolio-site-minimal-theme.thumb.jpg" width="600" height="400" style="width:80%;height:auto;margin:0.25em auto 1em auto;">
+		<img id="theme-preview-image" src="https://www.io200.com/storage/themes/portfolio-site-aspect-theme.thumb.jpg" width="600" height="400" style="width:80%;height:auto;margin:0.25em auto 1em auto;">
     </p>
     <p>
         <label class="visible" for="website_lang">Website Language</label>
         <select name="website_lang">
             <option value="en"' . ((isset($_POST['website_lang']) && $_POST['website_lang'] === 'en') ? ' selected' : '') . '>English</option>
             <option value="de"' . ((isset($_POST['website_lang']) && $_POST['website_lang'] === 'de') ? ' selected' : '') . '>German</option>
+            <option value="fr"' . ((isset($_POST['website_lang']) && $_POST['website_lang'] === 'fr') ? ' selected' : '') . '>French</option>
         </select>
     </p>
 </fieldset>
@@ -1412,7 +1524,7 @@ if ($DATA['_step'] + 1 === 5) {
             echo "<div class=\"waitmessage\">Please wait, the installation may take some time!</div>";
             flush();
         }
-        if (checkInstallFolder()) {
+        if (checkInstallPath() && checkInstallFolder()) {
             $result = InstallSystem($DATA);
             if (ErrorInfo::isError($result) === false) {
                 $result = ConfigurateSystem($DATA);
@@ -1452,6 +1564,7 @@ if (isset($_GET['migratekoken'])) {
     $KOKEN_DB_SETTINGS = GetKokenDatabaseSettings(__DIR__ . '/_koken');
     CopyKokenDatabase($KOKEN_DB_SETTINGS);
     FixNestedCollectionStructure($KOKEN_DB_SETTINGS);
+    FixKokenArticlesAndPages($KOKEN_DB_SETTINGS);
     header("Location: " . $_SERVER['PHP_SELF'] . "?migratekoken2");
 }
 if (isset($_GET['migratekoken2'])) {
@@ -1460,9 +1573,9 @@ if (isset($_GET['migratekoken2'])) {
     flush();
     CopyKokenCustom(__DIR__ . '/_koken/storage/custom', __DIR__ . '/storage/custom');
     CopyKokenOriginals(__DIR__ . '/_koken/storage/originals', __DIR__ . '/storage/originals');
-    FixOriginalPhotos(str_replace('install.php', 'listener/FixOriginalPhotos.php', (empty($_SERVER['HTTPS']) ? 'http://' : 'https://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']));
+    FixPhotos(str_replace('install.php', 'listener/FixPhotos.php', (empty($_SERVER['HTTPS']) ? 'http://' : 'https://') . $_SERVER['HTTP_HOST'] . $_SERVER['PHP_SELF']));
     unlink(__DIR__ . '/install.php');
-    $message_migratekoken = '<p class="message success">Congratulations, your Koken data has been migrated and your <a href="' . getScriptBaseURL() . '" target="_blank">new portfolio website</a> is online. Check if all your photos have been migrated using the <a href="' . getScriptBaseURL() . '/listener/FixOriginalPhotos.php" target="_blank">FixOriginalPhotos script</a>. Please recreate your website\'s navigation menu in your <a href="' . getScriptBaseURL() . '/admin/" target="_blank">Admin Panel (CMS)</a>.<br>Take a look at our <a href="https://www.io200.com/documentation#migration-koken" target="_blank">documentation</a>, if there are any problems with the migration (i.e. photos are not loading after logging in your admin panel).</p>';
+    $message_migratekoken = '<p class="message success">Congratulations, your Koken data has been migrated and your <a href="' . getScriptBaseURL() . '" target="_blank">new portfolio website</a> is online. Check if all your photos have been migrated using the <a href="' . getScriptBaseURL() . '/listener/FixPhotos.php" target="_blank">FixPhotos script</a>. Recreate your website\'s navigation menu in your <a href="' . getScriptBaseURL() . '/admin/" target="_blank">Admin Panel (CMS)</a>.<br><br>Take a look at our <a href="https://www.io200.com/documentation#migration-koken" target="_blank">documentation</a>, if there are any problems with the migration (i.e. photos are not loading after logging in your admin panel).</p>';
 	if(str_ends_with(getScriptBaseURL(), "/koken")){
 		$message_migratekoken .= '<p class="message">Please follow the steps in the documentation to <a href="https://www.io200.com/documentation#customizing-moveinstallation" target="_blank">move the installation from ' . getScriptBaseURL() . ' to ' . str_replace('/koken', '', getScriptBaseURL()) . '</a>.</p>';
 	}
@@ -1497,7 +1610,7 @@ if (isset($_GET['migratekoken2'])) {
     /*----------FONTS--------------------------------------------------------------------------*/
 	@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
 
-	/*----------RESET-------------------------------------------------------------------------*/
+	/*----------RESET-------------------------------------------------------------------------2*/
 	html,body,div,span,applet,object,iframe,h1,h2,h3,h4,h5,h6,p,blockquote,pre,a,abbr,acronym,address,big,cite,code,del,dfn,em,img,ins,kbd,q,s,samp,small,strike,strong,sub,sup,tt,var,b,u,i,center,dl,dt,dd,ol,ul,li,fieldset,form,label,legend,table,caption,tbody,tfoot,thead,tr,th,td,article,aside,canvas,details,embed,figure,figcaption,footer,header,hgroup,menu,nav,output,ruby,section,summary,time,mark,audio,video {margin:0;padding:0;border:0;font-size:100%;font:inherit;vertical-align:baseline;}
 	body {line-height:normal;} ol,ul {list-style:none;} table {border-collapse:collapse;border-spacing:0;} a{text-decoration:none;color:inherit;} img{display:block;} :focus{outline:0;}
 	/*----------BASE--------------------------------------------------------------------------*/
@@ -1602,7 +1715,7 @@ if (isset($_GET['migratekoken2'])) {
 	section form input:not([type="submit"]):not([type="reset"]), section form textarea{text-align:center;}
 	section form input:read-only:not([type="submit"]):not([type="reset"]){border:1px solid #fff;}
 	section form input:not([type="checkbox"]){width:100%;padding:0.8em!important;}
-	section form input[type="checkbox"]{position:relative;top:0.05em;}
+	section form input[type="checkbox"]{position:relative;top:0.1em;}
 	section form input[type="submit"]{font-size:1em;padding:0.8em!important;background:#262626;color:#fff;}
 	section form input[type="submit"]:hover{background:#000;color:#fff;}
 	section form input.hoverdanger[type="submit"]:hover{background:#cb0000;}
